@@ -1,100 +1,111 @@
-const API_ENDPOINT = 'https://your-api-endpoint.com/check';
+// ── Get your free API key at https://console.cloud.google.com/apis/credentials
+// ── Enable "Fact Check Tools API" in your Google Cloud project first.
+const GOOGLE_FACT_CHECK_API_KEY = 'YOUR_API_KEY_HERE';
+
+const FACT_CHECK_BASE =
+  'https://factchecktools.googleapis.com/v1alpha1/claims:search';
+
+chrome.action.onClicked.addListener((tab) => {
+  if (!tab.id) return;
+  chrome.tabs.sendMessage(tab.id, { action: 'toggleScan' });
+});
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action === 'scanPage') {
-    handleScan(msg.tabId)
-      .then((result) => sendResponse(result))
+  if (msg.action === 'checkClaims') {
+    checkAllClaims(msg.claims)
+      .then((results) => sendResponse({ results }))
       .catch((err) => sendResponse({ error: err.message }));
     return true;
   }
 });
 
-async function handleScan(tabId) {
-  const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: extractPageText
+async function checkAllClaims(claimTexts) {
+  const results = await Promise.all(claimTexts.map(checkSingleClaim));
+  return results;
+}
+
+async function checkSingleClaim(claimText) {
+  const params = new URLSearchParams({
+    query: claimText,
+    key: GOOGLE_FACT_CHECK_API_KEY,
+    languageCode: 'en'
   });
 
-  if (!result || result.length === 0) {
-    return { claims: [] };
+  try {
+    const res = await fetch(`${FACT_CHECK_BASE}?${params}`);
+
+    if (!res.ok) {
+      console.warn('FactOrCap: API returned', res.status, await res.text());
+      return unverifiedResult(claimText);
+    }
+
+    const data = await res.json();
+
+    if (!data.claims || data.claims.length === 0) {
+      return unverifiedResult(claimText);
+    }
+
+    return interpretBestMatch(claimText, data.claims);
+  } catch (err) {
+    console.error('FactOrCap: fetch error for claim', err);
+    return unverifiedResult(claimText);
   }
-
-  const claims = extractClaims(result);
-
-  if (claims.length === 0) {
-    return { claims: [] };
-  }
-
-  // TODO: Replace with actual API call once backend is ready.
-  // For now, simulate API responses so the UI is fully testable.
-  const checkedClaims = await checkClaimsAgainstApi(claims);
-
-  return { claims: checkedClaims };
-}
-
-function extractPageText() {
-  const bodyClone = document.body.cloneNode(true);
-
-  const removable = bodyClone.querySelectorAll(
-    'script, style, noscript, svg, img, video, audio, iframe, nav, footer, header, [role="navigation"], [role="banner"], [aria-hidden="true"]'
-  );
-  removable.forEach((el) => el.remove());
-
-  const text = bodyClone.innerText || bodyClone.textContent || '';
-
-  return text
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 20)
-    .join('\n');
 }
 
 /**
- * Naive claim extraction — splits text into sentences and filters for
- * ones that look like verifiable claims. This is a placeholder until
- * a model-based extractor is wired in.
+ * Picks the most relevant fact-check from Google's results and maps
+ * its textualRating to a fact / cap / unverified verdict.
  */
-function extractClaims(text) {
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
+function interpretBestMatch(claimText, apiClaims) {
+  const best = apiClaims[0];
+  const review = best.claimReview?.[0];
 
-  const claimPatterns =
-    /\b(is|are|was|were|has|have|had|will|can|could|should|would|percent|million|billion|according|study|research|found|showed|proved|reported|data|statistics|increase|decrease|cause|effect|average|rate|total)\b/i;
+  if (!review) return unverifiedResult(claimText);
 
-  return sentences
-    .map((s) => s.trim())
-    .filter((s) => s.length > 30 && s.length < 300)
-    .filter((s) => claimPatterns.test(s))
-    .slice(0, 10)
-    .map((text) => ({ text, verdict: 'checking' }));
+  const rating = (review.textualRating || '').toLowerCase();
+  const verdict = ratingToVerdict(rating);
+
+  const publisher = review.publisher?.name || review.publisher?.site || '';
+  const sourceUrl = review.url || '';
+  const title = review.title || '';
+
+  const parts = [];
+  if (title) parts.push(title);
+  if (publisher) parts.push(`— ${publisher}`);
+
+  return {
+    text: claimText,
+    verdict,
+    rating: review.textualRating || '',
+    explanation: parts.join(' ') || `Rated "${review.textualRating}"`,
+    sourceUrl,
+    publisher
+  };
 }
 
 /**
- * Sends claims to the fact-checking API. Currently simulated.
- * Replace the body of this function with a real fetch() call.
+ * Maps common textualRating strings from fact-checkers to our
+ * three-state verdict system. Ratings vary across publishers, so
+ * this covers the most common patterns.
  */
-async function checkClaimsAgainstApi(claims) {
-  // ── Simulated API delay & responses for development ──
-  await new Promise((r) => setTimeout(r, 1200));
+function ratingToVerdict(rating) {
+  const falsePatterns =
+    /\b(false|pants on fire|fake|incorrect|wrong|misleading|distort|manipulated|altered|fabricat|not true|cap|mostly false|barely true|no evidence)\b/i;
+  const truePatterns =
+    /\b(true|correct|accurate|verified|confirmed|right|mostly true|largely true)\b/i;
 
-  return claims.map((claim) => ({
-    ...claim,
-    verdict: Math.random() > 0.4 ? 'fact' : 'cap'
-  }));
+  if (falsePatterns.test(rating)) return 'cap';
+  if (truePatterns.test(rating)) return 'fact';
+  return 'unverified';
+}
 
-  // ── Real implementation (uncomment when API is ready) ──
-  // try {
-  //   const res = await fetch(API_ENDPOINT, {
-  //     method: 'POST',
-  //     headers: { 'Content-Type': 'application/json' },
-  //     body: JSON.stringify({ claims: claims.map(c => c.text) })
-  //   });
-  //   const data = await res.json();
-  //   return claims.map((claim, i) => ({
-  //     ...claim,
-  //     verdict: data.results[i] ? 'fact' : 'cap'
-  //   }));
-  // } catch (err) {
-  //   console.error('API error:', err);
-  //   return claims;
-  // }
+function unverifiedResult(claimText) {
+  return {
+    text: claimText,
+    verdict: 'unverified',
+    rating: '',
+    explanation: 'No matching fact-check found in Google\'s database.',
+    sourceUrl: '',
+    publisher: ''
+  };
 }
