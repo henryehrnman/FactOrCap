@@ -5,4 +5,6 @@ node_modules
 _debug
 _metadata
 dist
-**/*.swp 
+**/*.swp
+.venv/
+**/.venv/
