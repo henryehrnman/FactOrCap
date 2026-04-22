@@ -6,17 +6,182 @@
   let claims = [];
   let activeClaimId = null;
 
+  let fabRoot = null;
+  let fabShadow = null;
+
   // ─── Message listener ───────────────────────────────────
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.action === 'toggleScan') {
-      if (isOpen) {
-        closeSidebar();
-        removeHighlights();
-      } else {
-        runScan();
-      }
+      toggleScan();
     }
   });
+
+  function toggleScan() {
+    if (isOpen) {
+      closeSidebar();
+      removeHighlights();
+    } else {
+      runScan();
+    }
+  }
+
+  // ─── Floating action button ─────────────────────────────
+  function injectFloatingButton() {
+    if (fabRoot) return;
+
+    fabRoot = document.createElement('div');
+    fabRoot.className = 'foc-fab-root';
+    fabShadow = fabRoot.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
+    style.textContent = getFabCSS();
+    fabShadow.appendChild(style);
+
+    const btn = document.createElement('button');
+    btn.className = 'foc-fab';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Fact-check this page with FactOrCap');
+    btn.innerHTML = `
+      <span class="foc-fab-mark" aria-hidden="true">
+        <span class="foc-fab-check">&#10003;</span>
+      </span>
+      <span class="foc-fab-text">Fact<span class="foc-fab-accent">Or</span>Cap</span>
+      <button class="foc-fab-close" type="button" aria-label="Hide FactOrCap button">&times;</button>
+    `;
+
+    btn.addEventListener('click', (e) => {
+      if (e.target.closest('.foc-fab-close')) return;
+      toggleScan();
+    });
+
+    btn.querySelector('.foc-fab-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideFloatingButton();
+    });
+
+    fabShadow.appendChild(btn);
+
+    const mount = () => {
+      if (document.body && !document.body.contains(fabRoot)) {
+        document.body.appendChild(fabRoot);
+      }
+    };
+    if (document.body) mount();
+    else document.addEventListener('DOMContentLoaded', mount, { once: true });
+  }
+
+  function hideFloatingButton() {
+    if (!fabRoot) return;
+    fabRoot.style.display = 'none';
+  }
+
+  function setFabShiftedForSidebar(shifted) {
+    if (!fabShadow) return;
+    const btn = fabShadow.querySelector('.foc-fab');
+    if (!btn) return;
+    btn.classList.toggle('foc-fab-shifted', shifted);
+  }
+
+  function getFabCSS() {
+    return `
+      :host { all: initial; }
+
+      .foc-fab {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 2147483646;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px 10px 10px;
+        background: #0f1117;
+        color: #e4e6ed;
+        border: 1px solid #2a2e3b;
+        border-radius: 999px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: -0.2px;
+        cursor: pointer;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(124, 106, 239, 0.15);
+        transition: transform 0.2s ease, box-shadow 0.2s ease, right 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease;
+      }
+
+      .foc-fab:hover {
+        transform: translateY(-2px);
+        background: #161925;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(124, 106, 239, 0.35);
+      }
+
+      .foc-fab:active {
+        transform: translateY(0);
+      }
+
+      .foc-fab-shifted {
+        right: ${SIDEBAR_WIDTH + 20}px;
+      }
+
+      .foc-fab-mark {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #7c6aef 0%, #5848d1 100%);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 900;
+        line-height: 1;
+      }
+
+      .foc-fab-check {
+        display: inline-block;
+        transform: translateY(-1px);
+      }
+
+      .foc-fab-text {
+        white-space: nowrap;
+      }
+
+      .foc-fab-accent {
+        color: #7c6aef;
+      }
+
+      .foc-fab-close {
+        all: unset;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        margin-left: 2px;
+        border-radius: 50%;
+        color: #8b8fa3;
+        font-size: 16px;
+        line-height: 1;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+      }
+
+      .foc-fab:hover .foc-fab-close {
+        opacity: 1;
+      }
+
+      .foc-fab-close:hover {
+        color: #e4e6ed;
+        background: #2a2e3b;
+      }
+
+      @media (max-width: 480px) {
+        .foc-fab-text { display: none; }
+        .foc-fab { padding: 10px; }
+      }
+    `;
+  }
 
   // ─── Scan pipeline ──────────────────────────────────────
   async function runScan() {
@@ -40,7 +205,10 @@
       explanation: ''
     }));
 
-    highlightClaimsInPage();
+    const highlightCount = highlightClaimsInPage();
+    console.log(
+      `FactOrCap: highlighted ${highlightCount} of ${claims.length} claims on the page.`
+    );
     renderSidebarClaims();
 
     try {
@@ -101,52 +269,162 @@
   }
 
   // ─── DOM highlighting ───────────────────────────────────
-  function highlightClaimsInPage() {
+  /**
+   * Normalizes whitespace and collects every visible text node in the page
+   * into a single flat string, keeping a map from each flat-string index back
+   * to the owning (node, offset). This lets us match claims that span inline
+   * tags (<a>, <strong>, <em>, etc.), contain &nbsp;, or break across lines.
+   */
+  function buildFlatTextIndex() {
+    const REJECT_TAGS = new Set([
+      'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT',
+      'SELECT', 'OPTION', 'SVG', 'CANVAS', 'CODE', 'PRE'
+    ]);
+
     const walker = document.createTreeWalker(
       document.body,
       NodeFilter.SHOW_TEXT,
       {
         acceptNode(node) {
-          if (node.parentElement?.closest('.foc-sidebar-root')) {
+          const parent = node.parentElement;
+          if (!parent) return NodeFilter.FILTER_REJECT;
+          if (parent.closest('.foc-sidebar-root, .foc-fab-root')) {
             return NodeFilter.FILTER_REJECT;
           }
-          if (node.textContent.trim().length < 20) {
-            return NodeFilter.FILTER_REJECT;
+          let el = parent;
+          while (el) {
+            if (REJECT_TAGS.has(el.tagName)) return NodeFilter.FILTER_REJECT;
+            if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') {
+              return NodeFilter.FILTER_REJECT;
+            }
+            el = el.parentElement;
           }
+          if (!node.textContent) return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         }
       }
     );
 
     const textNodes = [];
-    while (walker.nextNode()) textNodes.push(walker.currentNode);
+    let flat = '';
+    const map = [];
 
-    claims.forEach((claim) => {
-      const searchStr = claim.text.replace(/[.!?]+$/, '').trim();
-      for (const node of textNodes) {
-        const idx = node.textContent.indexOf(searchStr);
-        if (idx === -1) continue;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const nodeIdx = textNodes.length;
+      textNodes.push(node);
+      const text = node.textContent;
 
-        const range = document.createRange();
-        range.setStart(node, idx);
-        range.setEnd(node, idx + searchStr.length);
-
-        const mark = document.createElement('mark');
-        mark.className = 'foc-highlight';
-        mark.dataset.claimId = claim.id;
-        mark.dataset.verdict = claim.verdict;
-        mark.addEventListener('click', () => onClaimClick(claim.id));
-
-        range.surroundContents(mark);
-        break;
+      let prevSpace = flat.length === 0 || flat.endsWith(' ');
+      for (let j = 0; j < text.length; j++) {
+        const ch = text[j];
+        const isWs = /\s/.test(ch) || ch === '\u00a0';
+        if (isWs) {
+          if (!prevSpace) {
+            flat += ' ';
+            map.push({ nodeIdx, offset: j });
+            prevSpace = true;
+          }
+        } else {
+          flat += ch;
+          map.push({ nodeIdx, offset: j });
+          prevSpace = false;
+        }
       }
+      if (!flat.endsWith(' ')) {
+        flat += ' ';
+        map.push({ nodeIdx, offset: text.length });
+      }
+    }
+
+    return { flat, map, textNodes };
+  }
+
+  function normalizeClaimText(text) {
+    return text.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function createHighlightMark(claim) {
+    const mark = document.createElement('mark');
+    mark.className = 'foc-highlight';
+    mark.dataset.claimId = claim.id;
+    mark.dataset.verdict = claim.verdict;
+    mark.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onClaimClick(claim.id);
     });
+    return mark;
+  }
+
+  /**
+   * Wraps the text spanning from (startMap) to (endMap) inclusive with <mark>
+   * elements. If the range crosses multiple text nodes, we create one <mark>
+   * per text-node segment so we don't violate Range.surroundContents rules.
+   */
+  function wrapFlatRange(textNodes, startMap, endMap, claim) {
+    let wrappedAny = false;
+    for (let i = startMap.nodeIdx; i <= endMap.nodeIdx; i++) {
+      const node = textNodes[i];
+      if (!node || !node.parentNode) continue;
+
+      const nodeLen = node.textContent.length;
+      const start = i === startMap.nodeIdx ? startMap.offset : 0;
+      const end = i === endMap.nodeIdx
+        ? Math.min(endMap.offset + 1, nodeLen)
+        : nodeLen;
+
+      if (start >= end) continue;
+
+      try {
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, end);
+        range.surroundContents(createHighlightMark(claim));
+        wrappedAny = true;
+      } catch (err) {
+        console.debug('FactOrCap: could not wrap segment', err);
+      }
+    }
+    return wrappedAny;
+  }
+
+  function highlightOneClaim(claim) {
+    const { flat, map, textNodes } = buildFlatTextIndex();
+    const needle = normalizeClaimText(claim.text);
+    if (needle.length < 10) return false;
+
+    let idx = flat.indexOf(needle);
+    if (idx === -1) {
+      const trimmed = needle.replace(/[.!?]+$/, '').trim();
+      if (trimmed.length >= 10) idx = flat.indexOf(trimmed);
+      if (idx === -1) return false;
+      const startMap = map[idx];
+      const endMap = map[idx + trimmed.length - 1];
+      if (!startMap || !endMap) return false;
+      return wrapFlatRange(textNodes, startMap, endMap, claim);
+    }
+
+    const startMap = map[idx];
+    const endMap = map[idx + needle.length - 1];
+    if (!startMap || !endMap) return false;
+    return wrapFlatRange(textNodes, startMap, endMap, claim);
+  }
+
+  function highlightClaimsInPage() {
+    let count = 0;
+    claims.forEach((claim) => {
+      if (highlightOneClaim(claim)) count++;
+    });
+    return count;
   }
 
   function updateHighlightVerdicts() {
     claims.forEach((claim) => {
-      const el = document.querySelector(`[data-claim-id="${claim.id}"]`);
-      if (el) el.dataset.verdict = claim.verdict;
+      document
+        .querySelectorAll(`.foc-highlight[data-claim-id="${claim.id}"]`)
+        .forEach((el) => {
+          el.dataset.verdict = claim.verdict;
+        });
     });
   }
 
@@ -169,8 +447,9 @@
       el.classList.remove('foc-active');
     });
 
-    const mark = document.querySelector(`[data-claim-id="${claimId}"]`);
-    if (mark) mark.classList.add('foc-active');
+    document
+      .querySelectorAll(`.foc-highlight[data-claim-id="${claimId}"]`)
+      .forEach((el) => el.classList.add('foc-active'));
 
     activeClaimId = claimId;
     renderSidebarClaims();
@@ -217,6 +496,7 @@
     requestAnimationFrame(() => panel.classList.add('open'));
     document.body.style.marginRight = `${SIDEBAR_WIDTH}px`;
     document.body.style.transition = 'margin-right 0.3s ease';
+    setFabShiftedForSidebar(true);
   }
 
   function closeSidebar() {
@@ -229,6 +509,7 @@
       el.classList.remove('foc-active');
     });
     activeClaimId = null;
+    setFabShiftedForSidebar(false);
   }
 
   // ─── Sidebar rendering ─────────────────────────────────
@@ -346,6 +627,8 @@
       list.appendChild(li);
     });
   }
+
+  injectFloatingButton();
 
   function escapeHtml(str) {
     const d = document.createElement('div');
