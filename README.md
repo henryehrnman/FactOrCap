@@ -1,29 +1,54 @@
-# Chrome Extensions samples
+# FactOrCap
 
-Official samples for Chrome Extensions and the Chrome Apps platform. (Chrome Apps are deprecated. Learn more [on the Chromium blog](https://blog.chromium.org/2020/08/changes-to-chrome-app-support-timeline.html)).
+AI-powered fact-checking Chrome extension. Scans the page you're on, extracts checkable claims, and tells you what's **fact** and what's **cap**.
 
-For more information on extensions, see [Chrome Developers](https://developer.chrome.com).
+## How It Works
 
-## Explore samples
+1. Click the FactOrCap icon in your toolbar.
+2. Hit **Scan Page** — the extension extracts text from the current page.
+3. Claims are identified and sent to a fact-checking API.
+4. Each claim is labeled **Fact** (true) or **Cap** (false).
 
-The directory structure is as follows:
+## Project Structure
 
-- [api-samples/](api-samples/) - extensions focused on a single API package
-- [functional-samples/](functional-samples/) - full featured extensions spanning multiple API packages
-- [\_archive/apps/](_archive/apps/) - deprecated Chrome Apps platform (not listed below)
-- [\_archive/mv2/](_archive/mv2/) - resources for manifest version 2
+```
+manifest.json        ← Extension manifest (MV3)
+background.js        ← Service worker: coordinates scanning & API calls
+content.js           ← Content script: extracts page text
+popup/
+  popup.html         ← Popup UI shell
+  popup.css          ← Styling (dark theme, animations)
+  popup.js           ← Popup logic & state management
+icons/
+  icon48.png         ← Toolbar icon
+  icon128.png        ← Store / management icon
+```
 
-You can also use the [Samples](https://developer.chrome.com/docs/extensions/samples/) page to discover extensions by type, permissions, and extension API.
+## Load the Extension
 
-## Installation
+1. Open `chrome://extensions` in Chrome.
+2. Enable **Developer mode** (toggle in the top-right).
+3. Click **Load unpacked** and select the `FactOrCap` folder.
+4. The extension icon will appear in your toolbar.
 
-To experiment with these samples, please clone this repo and use 'Load Unpacked Extension'.
-Read more on [Development Basics](https://developer.chrome.com/docs/extensions/mv3/getstarted/development-basics/#load-unpacked).
+## Configuration
 
-## Contributing
+The fact-checking API endpoint is defined in `background.js`:
 
-Please see [the CONTRIBUTING file](/CONTRIBUTING.md) for information on contributing to the `chrome-extensions-samples` project.
+```js
+const API_ENDPOINT = 'https://your-api-endpoint.com/check';
+```
 
-## License
+Replace it with your actual endpoint. The API should accept a JSON body like:
 
-`chrome-extensions-samples` are authored by Google and are licensed under the [Apache License, Version 2.0](/LICENSE).
+```json
+{ "claims": ["Claim one.", "Claim two."] }
+```
+
+And respond with:
+
+```json
+{ "results": [true, false] }
+```
+
+Until you connect a real API, the extension uses simulated responses so the UI is fully testable.

@@ -1,0 +1,58 @@
+/* Inline claim highlights — injected into host pages */
+
+.foc-highlight {
+  border-bottom: 2px dashed rgba(124, 106, 239, 0.6);
+  background: rgba(124, 106, 239, 0.08);
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  border-radius: 2px;
+  padding: 1px 0;
+}
+
+.foc-highlight:hover {
+  background: rgba(124, 106, 239, 0.18);
+}
+
+.foc-highlight[data-verdict="fact"] {
+  border-bottom-color: rgba(52, 211, 153, 0.7);
+  background: rgba(52, 211, 153, 0.1);
+}
+
+.foc-highlight[data-verdict="fact"]:hover {
+  background: rgba(52, 211, 153, 0.2);
+}
+
+.foc-highlight[data-verdict="cap"] {
+  border-bottom-color: rgba(248, 113, 113, 0.7);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.foc-highlight[data-verdict="cap"]:hover {
+  background: rgba(248, 113, 113, 0.2);
+}
+
+.foc-highlight[data-verdict="unverified"] {
+  border-bottom-color: rgba(251, 191, 36, 0.7);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.foc-highlight[data-verdict="unverified"]:hover {
+  background: rgba(251, 191, 36, 0.18);
+}
+
+.foc-highlight.foc-active {
+  outline: 2px solid rgba(124, 106, 239, 0.5);
+  outline-offset: 2px;
+}
+
+.foc-highlight[data-verdict="fact"].foc-active {
+  outline-color: rgba(52, 211, 153, 0.5);
+}
+
+.foc-highlight[data-verdict="cap"].foc-active {
+  outline-color: rgba(248, 113, 113, 0.5);
+}
+
+.foc-highlight[data-verdict="unverified"].foc-active {
+  outline-color: rgba(251, 191, 36, 0.5);
+}
