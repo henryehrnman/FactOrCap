@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Claim Highlighter",
+  "version": "1.0",
+  "description": "Highlights claims in online articles.",
+  "permissions": ["scripting", "activeTab"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "hello.html",
+    "default_icon": "hello_extensions.png"
+  }
+}
