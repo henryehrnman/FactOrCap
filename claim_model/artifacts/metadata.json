@@ -1,0 +1,21 @@
+{
+  "model_path": "claim_model/artifacts/claim_detector.keras",
+  "text_column": "text",
+  "label_column": "label",
+  "threshold": 0.5,
+  "train_samples": 59525,
+  "val_samples": 7440,
+  "test_samples": 7440,
+  "class_balance": {
+    "non_claim": 38563,
+    "claim": 35842
+  },
+  "test_metrics": {
+    "accuracy": 0.8756720423698425,
+    "auc": 0.9477551579475403,
+    "loss": 0.3032000660896301,
+    "precision": 0.8916053175926208,
+    "recall": 0.8445870280265808
+  },
+  "epochs_ran": 4
+}

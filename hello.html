@@ -1,5 +1,25 @@
-<html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FactOrCap Claim Detector</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
   <body>
-    <h1>Hello Extensions</h1>
+    <main class="container">
+      <h1>FactOrCap</h1>
+      <p class="subtitle">Detect claim-like sentences on this page.</p>
+
+      <button id="analyze-btn" type="button">Analyze Current Page</button>
+
+      <p id="status" class="status" role="status">
+        Start local server, then click Analyze.
+      </p>
+
+      <section id="summary" class="summary hidden"></section>
+      <ol id="results" class="results"></ol>
+    </main>
+    <script src="popup.js"></script>
   </body>
 </html>
