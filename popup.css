@@ -1,0 +1,79 @@
+.container {
+  width: 360px;
+  max-height: 520px;
+  overflow-y: auto;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  padding: 10px;
+  color: #1f2937;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.subtitle {
+  margin: 6px 0 12px;
+  color: #4b5563;
+  font-size: 0.9rem;
+}
+
+button {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.status {
+  margin: 12px 0 8px;
+  font-size: 0.85rem;
+  color: #374151;
+}
+
+.summary {
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  font-size: 0.85rem;
+}
+
+.hidden {
+  display: none;
+}
+
+.results {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.results li {
+  margin-bottom: 10px;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.score {
+  color: #065f46;
+  font-weight: 600;
+}
+
+.sentence {
+  color: #111827;
+}

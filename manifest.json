@@ -21,8 +21,10 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
+      "css": ["content.css"],
       "run_at": "document_idle"
     }
   ],
-  "permissions": ["activeTab", "scripting"]
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["https://factchecktools.googleapis.com/*"]
 }
