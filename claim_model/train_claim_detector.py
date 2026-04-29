@@ -284,7 +284,6 @@ def make_tf_dataset(
         ds = ds.shuffle(4096, seed=42, reshuffle_each_iteration=True)
     return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
-
 def build_model(max_tokens: int, max_length: int, train_texts: np.ndarray) -> tf.keras.Model:
     vectorizer = tf.keras.layers.TextVectorization(
         max_tokens=max_tokens,
