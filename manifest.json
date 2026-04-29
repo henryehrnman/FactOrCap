@@ -24,6 +24,6 @@
       "run_at": "document_idle"
     }
   ],
-  "permissions": ["activeTab"],
+  "permissions": ["activeTab", "scripting"],
   "host_permissions": ["https://factchecktools.googleapis.com/*"]
 }
