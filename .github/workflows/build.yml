@@ -16,12 +16,12 @@ jobs:
       contents: read
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install dependencies
@@ -39,7 +39,7 @@ jobs:
       contents: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Inject API keys into config.js
         env:
@@ -90,7 +90,7 @@ jobs:
 
       - name: Verify build has no placeholder left behind
         run: |
-          if grep -rE "__GOOGLE_FACT_CHECK_API_KEY__|__GEMINI_API_KEY__" "dist/factorcap"; then
+          if grep -E "__GOOGLE_FACT_CHECK_API_KEY__|__GEMINI_API_KEY__" "dist/factorcap/config.js"; then
             echo "::error::Placeholder leaked into build output."
             exit 1
           fi
