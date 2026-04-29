@@ -1,6 +1,19 @@
-// ── Get your free API key at https://console.cloud.google.com/apis/credentials
-// ── Enable "Fact Check Tools API" in your Google Cloud project first.
-const GOOGLE_FACT_CHECK_API_KEY = 'YOUR_API_KEY_HERE';
+// ── API key is loaded from config.js. That file is git-ignored and
+//    is generated either locally (cp config.template.js config.js,
+//    then paste your key) or by the GitHub Actions build, which
+//    substitutes the GOOGLE_FACT_CHECK_API_KEY repository secret
+//    into config.template.js. See README.md for full setup.
+try {
+  importScripts('config.js');
+} catch (err) {
+  console.error(
+    'FactOrCap: config.js not found. Copy config.template.js to config.js ' +
+      'and paste your Google Fact Check Tools API key.'
+  );
+}
+
+const GOOGLE_FACT_CHECK_API_KEY =
+  self.GOOGLE_FACT_CHECK_API_KEY || 'YOUR_API_KEY_HERE';
 
 const FACT_CHECK_BASE =
   'https://factchecktools.googleapis.com/v1alpha1/claims:search';
