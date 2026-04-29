@@ -5,7 +5,7 @@
 //    into config.template.js. See README.md for full setup.
 try {
   importScripts('config.js');
-} catch (err) {
+} catch {
   console.error(
     'FactOrCap: config.js not found. Copy config.template.js to config.js ' +
       'and paste your Google Fact Check Tools API key.'
@@ -145,7 +145,10 @@ async function checkWithGemini(claimText) {
     if (!text) return null;
 
     const parsed = JSON.parse(text);
-    if (!parsed.verdict || !['fact', 'cap', 'unverified'].includes(parsed.verdict)) {
+    if (
+      !parsed.verdict ||
+      !['fact', 'cap', 'unverified'].includes(parsed.verdict)
+    ) {
       return null;
     }
 
@@ -217,7 +220,7 @@ function unverifiedResult(claimText) {
     text: claimText,
     verdict: 'unverified',
     rating: '',
-    explanation: 'No matching fact-check found in Google\'s database.',
+    explanation: "No matching fact-check found in Google's database.",
     sourceUrl: '',
     publisher: '',
     source: 'fact-checker'

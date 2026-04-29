@@ -9,6 +9,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  lint:
+    name: Lint extension
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        env:
+          HUSKY: '0'
+        run: npm ci
+
+      - name: ESLint (FactOrCap sources)
+        run: npm run lint
+
   build:
     name: Bundle FactOrCap
     runs-on: ubuntu-latest
@@ -23,10 +46,16 @@ jobs:
           FCT_KEY: ${{ secrets.GOOGLE_FACT_CHECK_API_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if [ -z "$FCT_KEY" ]; then
-            echo "::error::Repository secret GOOGLE_FACT_CHECK_API_KEY is not set."
-            echo "Add it under Settings → Secrets and variables → Actions → New repository secret."
+          # Version tags must ship a real Fact Check API key.
+          if [ -z "$FCT_KEY" ] && [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            echo "::error::GOOGLE_FACT_CHECK_API_KEY is required to build a release tag."
             exit 1
+          fi
+          # Fork PRs and repos without secrets: use a CI-only placeholder so the
+          # bundle and placeholder checks still run (artifact is non-functional).
+          if [ -z "$FCT_KEY" ]; then
+            echo "::warning::GOOGLE_FACT_CHECK_API_KEY is not set; using a CI placeholder (set the secret for real builds)."
+            FCT_KEY="CI_PLACEHOLDER_SET_GOOGLE_FACT_CHECK_API_KEY_SECRET"
           fi
           # GEMINI_API_KEY is optional: if missing, the AI fallback is
           # simply disabled in the built extension. Substitute an empty
@@ -61,7 +90,7 @@ jobs:
 
       - name: Verify build has no placeholder left behind
         run: |
-          if grep -RE "__GOOGLE_FACT_CHECK_API_KEY__|__GEMINI_API_KEY__" "dist/factorcap"; then
+          if grep -rE "__GOOGLE_FACT_CHECK_API_KEY__|__GEMINI_API_KEY__" "dist/factorcap"; then
             echo "::error::Placeholder leaked into build output."
             exit 1
           fi
