@@ -25,5 +25,8 @@
     }
   ],
   "permissions": ["activeTab", "scripting"],
-  "host_permissions": ["https://factchecktools.googleapis.com/*"]
+  "host_permissions": [
+    "https://factchecktools.googleapis.com/*",
+    "https://generativelanguage.googleapis.com/*"
+  ]
 }

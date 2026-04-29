@@ -18,19 +18,30 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Inject API key into config.js
+      - name: Inject API keys into config.js
         env:
-          API_KEY: ${{ secrets.GOOGLE_FACT_CHECK_API_KEY }}
+          FCT_KEY: ${{ secrets.GOOGLE_FACT_CHECK_API_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if [ -z "$API_KEY" ]; then
+          if [ -z "$FCT_KEY" ]; then
             echo "::error::Repository secret GOOGLE_FACT_CHECK_API_KEY is not set."
             echo "Add it under Settings → Secrets and variables → Actions → New repository secret."
             exit 1
           fi
-          # awk so any character in the API key is treated literally,
-          # including ones that would be special to sed.
-          awk -v key="$API_KEY" '{ gsub(/__GOOGLE_FACT_CHECK_API_KEY__/, key); print }' \
-            config.template.js > config.js
+          # GEMINI_API_KEY is optional: if missing, the AI fallback is
+          # simply disabled in the built extension. Substitute an empty
+          # string in that case so the placeholder doesn't ship.
+          GEMINI_VALUE="${GEMINI_KEY:-}"
+          if [ -z "$GEMINI_VALUE" ]; then
+            echo "::warning::GEMINI_API_KEY secret is not set; AI fallback will be disabled in this build."
+          fi
+          # awk treats every character literally, so values with sed
+          # special chars (none expected, but be safe) won't break.
+          awk -v fct="$FCT_KEY" -v gem="$GEMINI_VALUE" '
+            { gsub(/__GOOGLE_FACT_CHECK_API_KEY__/, fct);
+              gsub(/__GEMINI_API_KEY__/, gem);
+              print }
+          ' config.template.js > config.js
           echo "Wrote config.js ($(wc -c < config.js) bytes)"
 
       - name: Read manifest version
@@ -50,7 +61,7 @@ jobs:
 
       - name: Verify build has no placeholder left behind
         run: |
-          if grep -R "__GOOGLE_FACT_CHECK_API_KEY__" "dist/factorcap"; then
+          if grep -RE "__GOOGLE_FACT_CHECK_API_KEY__|__GEMINI_API_KEY__" "dist/factorcap"; then
             echo "::error::Placeholder leaked into build output."
             exit 1
           fi
