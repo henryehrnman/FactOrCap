@@ -24,9 +24,10 @@
       "run_at": "document_idle"
     }
   ],
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": [
     "https://factchecktools.googleapis.com/*",
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/*",
+    "http://127.0.0.1:8000/*"
   ]
 }
