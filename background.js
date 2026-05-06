@@ -87,14 +87,56 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 async function checkSingleClaim(claimText) {
   const factCheckResult = await checkWithGoogleFactCheck(claimText);
 
-  // Only fall back to the model when Google's index has no published
-  // fact-check for this claim, and only if a Gemini key is configured.
+  // Only fall back to the model when Google's index has no decisive match,
+  // and only if a Gemini key is configured.
   if (factCheckResult.verdict === 'unverified' && GEMINI_ENABLED) {
-    const aiResult = await checkWithGemini(claimText);
+    let aiResult = await checkWithGemini(claimText, false);
+    if (aiResult?.verdict === 'unverified') {
+      const retry = await checkWithGemini(claimText, true);
+      if (retry) aiResult = retry;
+    }
     if (aiResult) return aiResult;
   }
 
   return factCheckResult;
+}
+
+/**
+ * Extra query shapes improve recall against Google's claim index (verbatim
+ * page text often mismatches how fact-checkers phrase the claim).
+ */
+function buildSearchVariants(raw) {
+  const t = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return [];
+
+  const variants = new Set([t]);
+
+  const strippedLead = t
+    .replace(
+      /^(according to|based on|reports?\s+(say|claim|suggest)|it(?:'s| is)\s+(said|claimed|reported)\s+that)\s+/i,
+      ''
+    )
+    .trim();
+  if (strippedLead.length >= 24) variants.add(strippedLead);
+
+  const sentences = t.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sentences[0] && sentences.length > 1 && sentences[0].length >= 24) {
+    variants.add(sentences[0].trim());
+  }
+
+  if (t.length > 160) {
+    const cut = t
+      .slice(0, 140)
+      .replace(/\s+\S*$/, '')
+      .trim();
+    if (cut.length >= 40) variants.add(cut);
+  }
+
+  return [...variants];
 }
 
 async function checkWithGoogleFactCheck(claimText) {
@@ -105,27 +147,37 @@ async function checkWithGoogleFactCheck(claimText) {
     );
   }
 
-  const params = new URLSearchParams({
-    query: claimText,
-    key: GOOGLE_FACT_CHECK_API_KEY,
-    languageCode: 'en'
-  });
+  const variants = buildSearchVariants(claimText);
+  let lastCandidate = null;
 
   try {
-    const res = await fetch(`${FACT_CHECK_BASE}?${params}`);
+    for (const query of variants) {
+      const params = new URLSearchParams({
+        query,
+        key: GOOGLE_FACT_CHECK_API_KEY,
+        languageCode: 'en'
+      });
 
-    if (!res.ok) {
-      console.warn('FactOrCap: API returned', res.status, await res.text());
-      return unverifiedResult(claimText);
+      const res = await fetch(`${FACT_CHECK_BASE}?${params}`);
+
+      if (!res.ok) {
+        console.warn('FactOrCap: API returned', res.status, await res.text());
+        continue;
+      }
+
+      const data = await res.json();
+
+      if (!data.claims || data.claims.length === 0) {
+        lastCandidate = lastCandidate || unverifiedResult(claimText);
+        continue;
+      }
+
+      const interpreted = interpretBestMatch(claimText, data.claims);
+      if (interpreted.verdict !== 'unverified') return interpreted;
+      lastCandidate = interpreted;
     }
 
-    const data = await res.json();
-
-    if (!data.claims || data.claims.length === 0) {
-      return unverifiedResult(claimText);
-    }
-
-    return interpretBestMatch(claimText, data.claims);
+    return lastCandidate || unverifiedResult(claimText);
   } catch (err) {
     console.error('FactOrCap: fetch error for claim', err);
     return unverifiedResult(claimText);
@@ -139,21 +191,43 @@ async function checkWithGoogleFactCheck(claimText) {
  * parsing. Returns null on any failure so the caller falls back to the
  * original "unverified" result.
  */
-async function checkWithGemini(claimText) {
+function geminiPrompt(claimText, retry) {
+  if (retry) {
+    return (
+      'You already judged this claim as unverified. Re-read it.\n\n' +
+      'Respond with "unverified" ONLY if the claim is purely subjective ' +
+      '(taste, moral opinion), unfalsifiable, or impossible to assess from ' +
+      'general knowledge.\n\n' +
+      'For anything testable (history, geography, science, public events, ' +
+      'quotes, numbers, whether something exists), you MUST choose ' +
+      '"fact" or "cap" — whichever fits mainstream consensus and reputable ' +
+      'sources better. Prefer "cap" when the claim exaggerates or omits ' +
+      'critical context.\n\n' +
+      'Keep the explanation to one short sentence.\n\nClaim: ' +
+      claimText
+    );
+  }
+  return (
+    'You are a careful fact-checker. Evaluate the claim using widely ' +
+    'available mainstream knowledge from reputable sources.\n\n' +
+    'Use "fact" when the claim is accurate or essentially accurate.\n' +
+    'Use "cap" when it is false, misleading, omits crucial context, or ' +
+    'is fabricated.\n' +
+    'Use "unverified" ONLY when the claim is purely subjective, ' +
+    'ambiguous without scope, or cannot be assessed from general ' +
+    'knowledge (not merely because you want to hedge).\n\n' +
+    'Keep the explanation to one short sentence.\n\nClaim: ' +
+    claimText
+  );
+}
+
+async function checkWithGemini(claimText, retry) {
   const body = {
     contents: [
       {
         parts: [
           {
-            text:
-              'You are a careful fact-checker. Evaluate the following ' +
-              'claim using widely available, mainstream knowledge. Use ' +
-              '"fact" if the claim is clearly true or accurate, "cap" ' +
-              'if it is clearly false, misleading, or fabricated, and ' +
-              '"unverified" if you do not have enough reliable ' +
-              'information either way. Keep the explanation to one ' +
-              'short sentence.\n\nClaim: ' +
-              claimText
+            text: geminiPrompt(claimText, retry)
           }
         ]
       }
@@ -215,18 +289,29 @@ async function checkWithGemini(claimText) {
 }
 
 /**
- * Picks the most relevant fact-check from Google's results and maps
- * its textualRating to a fact / cap / unverified verdict.
+ * Picks the best fact-check from Google's results and maps textualRating
+ * to a verdict. Scans every returned claim — ordering is not always best-first.
  */
 function interpretBestMatch(claimText, apiClaims) {
-  const best = apiClaims[0];
-  const review = best.claimReview?.[0];
+  let fallback = null;
 
-  if (!review) return unverifiedResult(claimText);
+  for (const entry of apiClaims) {
+    const review = entry.claimReview?.[0];
+    if (!review) continue;
 
-  const rating = (review.textualRating || '').toLowerCase();
-  const verdict = ratingToVerdict(rating);
+    const rating = (review.textualRating || '').toLowerCase();
+    const verdict = ratingToVerdict(rating);
 
+    const built = buildFactCheckerResult(claimText, review, verdict);
+
+    if (verdict !== 'unverified') return built;
+    if (!fallback) fallback = built;
+  }
+
+  return fallback || unverifiedResult(claimText);
+}
+
+function buildFactCheckerResult(claimText, review, verdict) {
   const publisher = review.publisher?.name || review.publisher?.site || '';
   const sourceUrl = review.url || '';
   const title = review.title || '';
@@ -252,13 +337,19 @@ function interpretBestMatch(claimText, apiClaims) {
  * this covers the most common patterns.
  */
 function ratingToVerdict(rating) {
+  if (!rating || !String(rating).trim()) return 'unverified';
+
   const falsePatterns =
-    /\b(false|pants on fire|fake|incorrect|wrong|misleading|distort|manipulated|altered|fabricat|not true|cap|mostly false|barely true|no evidence)\b/i;
+    /\b(false|pants on fire|four\s*pinocchios?|three\s*pinocchios?|fake|incorrect|wrong|misleading|distort|manipulated|altered|fabricat|not true|cap|mostly false|barely true|no evidence|baseless|debunked|unsubstantiated|hoax|doctored|scam|miscaptioned|altered\s+video|out\s+of\s+context|lacks\s+context|missing\s+context|partially false|partly false)\b/i;
   const truePatterns =
-    /\b(true|correct|accurate|verified|confirmed|right|mostly true|largely true)\b/i;
+    /\b(true|correct|accurate|verified|confirmed|right|mostly true|largely true|substantially true|generally accurate|true\s*\(?with\s*caveats?\)?)\b/i;
+  const mixedLeansCap =
+    /\b(half[\s-]?true|half[\s-]?false|mixture|mixed|partly true|partially true|some\s+truth|element\s+of\s+truth)\b/i;
 
   if (falsePatterns.test(rating)) return 'cap';
   if (truePatterns.test(rating)) return 'fact';
+  // IFCN "mixture" / PolitiFact-style grades — treat as misleading unless clearly true above.
+  if (mixedLeansCap.test(rating)) return 'cap';
   return 'unverified';
 }
 
