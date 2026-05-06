@@ -1,64 +1,10 @@
 // ── API key is loaded from config.js. That file is git-ignored and
-//    is generated either locally (cp config.template.js config.js,
-//    then paste your key) or by the GitHub Actions build, which
-//    substitutes the GOOGLE_FACT_CHECK_API_KEY repository secret
-//    into config.template.js. See README.md for full setup.
+//    is generated either locally (cp config.template.js config.js,
+//    then paste your key) or by the GitHub Actions build, which
+//    substitutes the GOOGLE_FACT_CHECK_API_KEY repository secret
+//    into config.template.js. See README.md for full setup.
 try {
-  importScripts('config.js');
-} catch (err) {
-  console.error(
-    'FactOrCap: config.js not found. Copy config.template.js to config.js ' +
-      'and paste your Google Fact Check Tools API key.'
-  );
-}
-
-const GOOGLE_FACT_CHECK_API_KEY =
-  self.GOOGLE_FACT_CHECK_API_KEY || 'YOUR_API_KEY_HERE';
-
-const FACT_CHECK_BASE =
-  'https://factchecktools.googleapis.com/v1alpha1/claims:search';
-
-chrome.action.onClicked.addListener((tab) => {
-  if (!tab.id) return;
-  chrome.tabs.sendMessage(tab.id, { action: 'toggleScan' });
-});
-
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action === 'checkClaims') {
-    checkAllClaims(msg.claims)
-      .then((results) => sendResponse({ results }))
-      .catch((err) => sendResponse({ error: err.message }));
-    return true;
-  }
-});
-
-async function checkAllClaims(claimTexts) {
-  const results = await Promise.all(claimTexts.map(checkSingleClaim));
-  return results;
-}
-
-async function checkSingleClaim(claimText) {
-  const params = new URLSearchParams({
-    query: claimText,
-    key: GOOGLE_FACT_CHECK_API_KEY,
-    languageCode: 'en'
-  });
-
-  try {
-    const res = await fetch(`${FACT_CHECK_BASE}?${params}`);
-
-    if (!res.ok) {
-      console.warn('FactOrCap: API returned', res.status, await res.text());
-      return unverifiedResult(claimText);
-    }
-
-    const data = await res.json();
-
-    if (!data.claims || data.claims.length === 0) {
-      return unverifiedResult(claimText);
-    }
-
-    return interpretBestMatch(claimText, data.claims);
+    importScripts('config.js');
   } catch (err) {
     console.error(
       'FactOrCap: config.js not found. Copy config.template.js to config.js ' +
