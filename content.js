@@ -438,30 +438,51 @@
   // Sentences that match these patterns are almost always navigation /
   // boilerplate, even though they pass the verb-keyword filter. Each
   // entry has caused at least one bad extraction we've seen in testing.
-  const _UI_NOISE_PATTERN =
-    /\b(view source|edit this page|click here|see also|main article|jump to|table of contents|cookie policy|privacy policy|terms of use|sign in|log in|create account|powered by|all rights reserved|read more|learn more|skip to content|page semi-protected|this is a good article)\b/i;
+  const UI_NOISE_PATTERN =
+    /\b(view source|edit this page|click here|see also|main article|jump to|table of contents|cookie policy|privacy policy|terms of use|sign in|log in|create account|powered by|all rights reserved|read more|learn more|skip to content|page semi-protected|this is a good article|subscribe|sign up|share this|follow us|comments? section)\b/i;
 
-  function _cleanClaimText(sentence) {
+  function cleanClaimText(sentence) {
     let cleaned = sentence;
     for (const re of BRACKET_NOISE_PATTERNS) cleaned = cleaned.replace(re, ' ');
     return cleaned.replace(/\s+/g, ' ').trim();
   }
 
   /**
-   * Placeholder claim extractor — splits into sentences, strips footnote
-   * markers, drops UI/navigation patterns, and keeps sentences that look
-   * like verifiable statements. Replace with model output.
+   * Sentence-level claim extractor. Splits into sentences, strips footnote
+   * markers, drops questions, UI/navigation patterns, and fragments that
+   * don't look like verifiable statements.
    */
   function extractClaims(text) {
     const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
-    const pattern =
-      /\b(is|are|was|were|has|have|had|will|can|could|should|would|percent|million|billion|according|study|research|found|showed|proved|reported|data|statistics|increase|decrease|cause|effect|average|rate|total)\b/i;
+    const verbKeywords =
+      /\b(is|are|was|were|has|have|had|will|can|could|should|would|percent|million|billion|according|study|research|found|showed|proved|reported|data|statistics|increase|decrease|cause|effect|average|rate|total|launched|announced|signed|killed|killed|won|lost|elected|published|passed|banned|approved)\b/i;
 
-    return sentences
-      .map((s) => s.trim())
-      .filter((s) => s.length > 30 && s.length < 300)
-      .filter((s) => pattern.test(s))
-      .slice(0, 15);
+    const seen = new Set();
+    const out = [];
+
+    for (const raw of sentences) {
+      let s = cleanClaimText(raw);
+
+      if (s.length < 40 || s.length > 280) continue;
+      if (s.endsWith('?')) continue;
+      if (UI_NOISE_PATTERN.test(s)) continue;
+      if (!verbKeywords.test(s)) continue;
+      // Skip likely-headers / list items that are mostly Title Case words.
+      const words = s.split(/\s+/);
+      if (words.length < 6) continue;
+      const titleish =
+        words.filter((w) => /^[A-Z][a-z]+$/.test(w)).length / words.length;
+      if (titleish > 0.6) continue;
+
+      const key = s.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      out.push(s);
+      if (out.length >= 15) break;
+    }
+
+    return out;
   }
 
   // ─── DOM highlighting ───────────────────────────────────

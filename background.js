@@ -73,16 +73,66 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === 'checkClaim') {
+    const claim = normalizeClaimForLookup(msg.claim);
+    const mode = msg.mode === 'enhanced' ? 'enhanced' : 'standard';
+    const cached = readCache(claim, mode);
+    if (cached) {
+      sendResponse({ result: cached });
+      return false;
+    }
     const run =
-      msg.mode === 'enhanced'
-        ? () => checkOneEnhanced(msg.claim)
-        : () => checkSingleClaim(msg.claim);
-    run()
-      .then((result) => sendResponse({ result }))
+      mode === 'enhanced'
+        ? () => checkOneEnhanced(claim)
+        : () => checkSingleClaim(claim);
+    runOnce(`${mode}::${claim}`, run)
+      .then((result) => {
+        writeCache(claim, mode, result);
+        sendResponse({ result });
+      })
       .catch((err) => sendResponse({ error: err.message }));
     return true;
   }
 });
+
+// In-flight dedup + ~10-min in-memory verdict cache.
+const inFlight = new Map();
+const verdictCache = new Map();
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+function normalizeClaimForLookup(text) {
+  return String(text || '')
+    .replace(/\[\d+\]|\[citation needed\]|\[update\]|\[edit\]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cacheKey(claim, mode) {
+  return `${mode}::${claim.toLowerCase()}`;
+}
+
+function readCache(claim, mode) {
+  const hit = verdictCache.get(cacheKey(claim, mode));
+  if (hit && Date.now() - hit.t < CACHE_TTL_MS) return hit.v;
+  if (hit) verdictCache.delete(cacheKey(claim, mode));
+  return null;
+}
+
+function writeCache(claim, mode, result) {
+  if (!result || result.verdict === 'checking') return;
+  verdictCache.set(cacheKey(claim, mode), { v: result, t: Date.now() });
+  if (verdictCache.size > 500) {
+    const firstKey = verdictCache.keys().next().value;
+    verdictCache.delete(firstKey);
+  }
+}
+
+function runOnce(key, fn) {
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+  const p = fn().finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}
 
 async function checkSingleClaim(claimText) {
   const factCheckResult = await checkWithGoogleFactCheck(claimText);
@@ -91,7 +141,19 @@ async function checkSingleClaim(claimText) {
   // and only if a Gemini key is configured.
   if (factCheckResult.verdict === 'unverified' && GEMINI_ENABLED) {
     const aiResult = await checkWithGemini(claimText);
-    if (aiResult) return aiResult;
+    if (!aiResult) return factCheckResult;
+    // If Gemini also can't decide, keep the better of the two — preferring
+    // Google's result when it has a real source URL the user can click.
+    if (aiResult.verdict === 'unverified' && factCheckResult.sourceUrl) {
+      return {
+        ...factCheckResult,
+        explanation:
+          factCheckResult.explanation ||
+          aiResult.explanation ||
+          factCheckResult.explanation
+      };
+    }
+    return aiResult;
   }
 
   return factCheckResult;
@@ -388,9 +450,11 @@ async function checkOneEnhanced(claimText) {
   } catch (err) {
     console.error('FactOrCap: enhanced backend fetch failed', err);
     throw new Error(
-      'Enhanced backend unreachable at ' +
+      'Enhanced (ALPHA) backend not reachable at ' +
         ENHANCED_BACKEND_URL +
-        '. Start it with `uvicorn app.main:app` (from backend/) or switch to Standard mode.'
+        '. Open a terminal in `backend/`, run `source .venv/bin/activate && ' +
+        'uvicorn app.main:app --reload --port 8000`, then retry — or flip ' +
+        'the toggle back to Standard.'
     );
   }
 
