@@ -14,6 +14,13 @@ try {
 
 const GOOGLE_FACT_CHECK_API_KEY =
   self.GOOGLE_FACT_CHECK_API_KEY || 'YOUR_API_KEY_HERE';
+const HAS_VALID_GOOGLE_KEY =
+  GOOGLE_FACT_CHECK_API_KEY &&
+  GOOGLE_FACT_CHECK_API_KEY !== 'YOUR_API_KEY_HERE' &&
+  !GOOGLE_FACT_CHECK_API_KEY.startsWith('__GOOGLE_FACT_CHECK_API_KEY__') &&
+  !GOOGLE_FACT_CHECK_API_KEY.startsWith(
+    'CI_PLACEHOLDER_SET_GOOGLE_FACT_CHECK_API_KEY_SECRET'
+  );
 
 const GEMINI_API_KEY = self.GEMINI_API_KEY || '';
 const GEMINI_ENABLED =
@@ -58,6 +65,13 @@ async function checkSingleClaim(claimText) {
 }
 
 async function checkWithGoogleFactCheck(claimText) {
+  if (!HAS_VALID_GOOGLE_KEY) {
+    return unverifiedResult(
+      claimText,
+      'FactOrCap is not configured: add a real GOOGLE_FACT_CHECK_API_KEY in config.js.'
+    );
+  }
+
   const params = new URLSearchParams({
     query: claimText,
     key: GOOGLE_FACT_CHECK_API_KEY,
@@ -215,12 +229,15 @@ function ratingToVerdict(rating) {
   return 'unverified';
 }
 
-function unverifiedResult(claimText) {
+function unverifiedResult(
+  claimText,
+  explanation = "No matching fact-check found in Google's database."
+) {
   return {
     text: claimText,
     verdict: 'unverified',
     rating: '',
-    explanation: "No matching fact-check found in Google's database.",
+    explanation,
     sourceUrl: '',
     publisher: '',
     source: 'fact-checker'

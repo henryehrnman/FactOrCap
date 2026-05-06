@@ -260,15 +260,35 @@
    * that look like verifiable statements. Replace with model output.
    */
   function extractClaims(text) {
-    const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    const sentenceLike =
+      normalized.match(/[^.!?\n]+(?:[.!?]+|$)/g)?.map((s) => s.trim()) || [];
+    const lineLike =
+      text
+        .split(/\n+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 30) || [];
+    const candidates = [...sentenceLike, ...lineLike];
     const pattern =
       /\b(is|are|was|were|has|have|had|will|can|could|should|would|percent|million|billion|according|study|research|found|showed|proved|reported|data|statistics|increase|decrease|cause|effect|average|rate|total)\b/i;
+    const deduped = [];
+    const seen = new Set();
 
-    return sentences
-      .map((s) => s.trim())
-      .filter((s) => s.length > 30 && s.length < 300)
-      .filter((s) => pattern.test(s))
-      .slice(0, 15);
+    candidates.forEach((s) => {
+      const clean = s.replace(/\s+/g, ' ').trim();
+      if (clean.length < 30 || clean.length > 320) return;
+      const key = clean.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      deduped.push(clean);
+    });
+
+    const prioritized = deduped.filter((s) => pattern.test(s));
+    if (prioritized.length > 0) return prioritized.slice(0, 15);
+
+    // Fallback: if heuristics are too strict for a page, still check likely
+    // statements so the extension doesn't appear to do nothing.
+    return deduped.slice(0, 15);
   }
 
   // ─── DOM highlighting ───────────────────────────────────
