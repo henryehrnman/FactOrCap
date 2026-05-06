@@ -1,13 +1,68 @@
 (() => {
   const SIDEBAR_WIDTH = 380;
+  const MODE_STORAGE_KEY = 'foc_mode';
+  const VALID_MODES = new Set(['standard', 'enhanced']);
+
   let sidebarRoot = null;
   let shadowRoot = null;
   let isOpen = false;
   let claims = [];
   let activeClaimId = null;
+  let currentMode = 'standard';
+  // Bumped at the start of every scan / re-check. In-flight per-claim
+  // promises check this before mutating state, so a stale response from
+  // a prior scan can't overwrite results from the current one (e.g.
+  // when the user toggles modes mid-flight).
+  let scanCounter = 0;
 
   let fabRoot = null;
   let fabShadow = null;
+
+  // ─── Mode (Standard vs Enhanced ALPHA) ──────────────────
+  chrome.storage.local.get(MODE_STORAGE_KEY, (data) => {
+    const stored = data?.[MODE_STORAGE_KEY];
+    if (VALID_MODES.has(stored)) {
+      currentMode = stored;
+      syncModeToggleUI();
+    }
+  });
+
+  // Pick up changes from other tabs/contexts so the toggle stays in sync.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[MODE_STORAGE_KEY]) return;
+    const next = changes[MODE_STORAGE_KEY].newValue;
+    if (VALID_MODES.has(next) && next !== currentMode) {
+      currentMode = next;
+      syncModeToggleUI();
+    }
+  });
+
+  function setMode(mode) {
+    if (!VALID_MODES.has(mode) || mode === currentMode) return;
+    currentMode = mode;
+    chrome.storage.local.set({ [MODE_STORAGE_KEY]: mode });
+    syncModeToggleUI();
+    // If the sidebar already has results, re-check them under the new mode.
+    // Without this, switching modes leaves the previous verdicts on screen,
+    // which is confusing — the toggle should feel like it does something.
+    if (isOpen && claims.length > 0) {
+      recheckClaims();
+    }
+  }
+
+  function syncModeToggleUI() {
+    if (!shadowRoot) return;
+    shadowRoot.querySelectorAll('.foc-mode-btn').forEach((btn) => {
+      btn.classList.toggle(
+        'foc-mode-btn-active',
+        btn.dataset.mode === currentMode
+      );
+      btn.setAttribute(
+        'aria-selected',
+        btn.dataset.mode === currentMode ? 'true' : 'false'
+      );
+    });
+  }
 
   // ─── Message listener ───────────────────────────────────
   chrome.runtime.onMessage.addListener((msg) => {
@@ -211,38 +266,149 @@
     );
     renderSidebarClaims();
 
+    await checkAllClaimsParallel();
+  }
+
+  /**
+   * Re-runs verdict checks against the existing claim set, without
+   * re-extracting page text or re-injecting highlights. Used when the
+   * mode toggle flips while results are on screen.
+   */
+  async function recheckClaims() {
+    claims.forEach(resetClaimToChecking);
+    updateHighlightVerdicts();
+    renderSidebarClaims();
+    await checkAllClaimsParallel();
+  }
+
+  function resetClaimToChecking(claim) {
+    claim.verdict = 'checking';
+    claim.explanation = '';
+    claim.rating = '';
+    claim.sourceUrl = '';
+    claim.publisher = '';
+    claim.source = '';
+    claim.score = null;
+    claim.confidence = null;
+  }
+
+  /**
+   * Fires one chrome.runtime message per claim, in parallel. Each card
+   * updates the moment its own response lands, so the sidebar fills in
+   * incrementally instead of waiting for the whole batch. `scanCounter`
+   * gates the writes so a stale response from an earlier scan / mode
+   * can't clobber the current one.
+   */
+  async function checkAllClaimsParallel() {
+    const scanId = ++scanCounter;
+    const mode = currentMode;
+    await Promise.all(
+      claims.map((claim) => checkOneAndApply(scanId, claim, mode))
+    );
+  }
+
+  async function checkOneAndApply(scanId, claim, mode) {
+    let response;
     try {
-      const response = await chrome.runtime.sendMessage({
-        action: 'checkClaims',
-        claims: claims.map((c) => c.text)
+      response = await chrome.runtime.sendMessage({
+        action: 'checkClaim',
+        claim: claim.text,
+        mode
       });
-
-      if (response.error) throw new Error(response.error);
-
-      response.results.forEach((result, i) => {
-        if (claims[i]) {
-          claims[i].verdict = result.verdict;
-          claims[i].explanation = result.explanation;
-          claims[i].rating = result.rating || '';
-          claims[i].sourceUrl = result.sourceUrl || '';
-          claims[i].publisher = result.publisher || '';
-        }
-      });
-
-      updateHighlightVerdicts();
-      renderSidebarClaims();
     } catch (err) {
-      console.error('FactOrCap: API error', err);
-      renderSidebarError(err.message);
+      response = { error: err?.message || String(err) };
     }
+
+    // Bail if a newer scan started while we were waiting.
+    if (scanId !== scanCounter) return;
+
+    if (response?.error) {
+      claim.verdict = 'unverified';
+      claim.explanation = response.error;
+      claim.source = mode === 'enhanced' ? 'enhanced' : 'fact-checker';
+    } else if (response?.result) {
+      const r = response.result;
+      claim.verdict = r.verdict || 'unverified';
+      claim.explanation = r.explanation || '';
+      claim.rating = r.rating || '';
+      claim.sourceUrl = r.sourceUrl || '';
+      claim.publisher = r.publisher || '';
+      claim.source =
+        r.source || (mode === 'enhanced' ? 'enhanced' : 'fact-checker');
+      claim.score = typeof r.score === 'number' ? r.score : null;
+      claim.confidence = typeof r.confidence === 'number' ? r.confidence : null;
+    }
+
+    updateHighlightVerdicts();
+    renderSidebarClaims();
   }
 
   // ─── Text extraction ────────────────────────────────────
+
+  // Selectors for elements that hold UI chrome rather than article body.
+  // We strip these from a clone of the page before extracting text. Mix
+  // of generic semantic tags + roles (works on any site) and a few
+  // Wikipedia-specific class names that show up across many articles
+  // (harmless to query for on non-Wiki pages).
+  const STRIP_SELECTORS = [
+    'script',
+    'style',
+    'noscript',
+    'svg',
+    'img',
+    'video',
+    'audio',
+    'iframe',
+    'canvas',
+    'nav',
+    'aside',
+    'header',
+    'footer',
+    'form',
+    'fieldset',
+    'select',
+    'menu',
+    'button',
+    'textarea',
+    'input',
+    'figcaption',
+    '[aria-hidden="true"]',
+    '[role="navigation"]',
+    '[role="banner"]',
+    '[role="contentinfo"]',
+    '[role="complementary"]',
+    '[role="search"]',
+    '[role="dialog"]',
+    '[role="note"]',
+    '[role="menubar"]',
+    '[role="tablist"]',
+    // Wikipedia chrome: edit links, footnote markers, navboxes,
+    // appearance settings, hatnotes, etc.
+    '.mw-editsection',
+    '.mw-jump-link',
+    '.mw-indicators',
+    '.reference',
+    '.reflist',
+    '.references',
+    '.navbox',
+    '.navbox-inner',
+    '.toc',
+    '.toctitle',
+    '.hatnote',
+    '.metadata',
+    '.shortdescription',
+    '.vector-page-tools',
+    '.vector-menu',
+    '.vector-appearance-landmark',
+    // Generic banner / cookie / consent UI
+    '.cookie-banner',
+    '[id*="cookie-banner"]',
+    '[id*="consent-banner"]'
+  ].join(', ');
+
   function extractPageText() {
     const clone = document.body.cloneNode(true);
-    clone.querySelectorAll(
-      'script, style, noscript, svg, img, video, audio, iframe, [aria-hidden="true"]'
-    ).forEach((el) => el.remove());
+    clone.querySelectorAll(STRIP_SELECTORS).forEach((el) => el.remove());
 
     const text = clone.innerText || clone.textContent || '';
     return text
@@ -252,9 +418,39 @@
       .join('\n');
   }
 
+  // Bracketed footnote / editorial markers that pollute extracted claims:
+  // [10], [a], [note 1], [citation needed], etc. Wikipedia articles are
+  // riddled with these; left in, they make claims look weird in the
+  // sidebar and confuse downstream highlighting.
+  const BRACKET_NOISE_PATTERNS = [
+    /\[\d+\]/g,
+    /\[[a-z]\]/gi,
+    /\[note\s+\d+\]/gi,
+    /\[citation needed\]/gi,
+    /\[clarification needed\]/gi,
+    /\[update\]/gi,
+    /\[edit\]/gi,
+    /\[when\?\]/gi,
+    /\[who\?\]/gi,
+    /\[which\?\]/gi
+  ];
+
+  // Sentences that match these patterns are almost always navigation /
+  // boilerplate, even though they pass the verb-keyword filter. Each
+  // entry has caused at least one bad extraction we've seen in testing.
+  const UI_NOISE_PATTERN =
+    /\b(view source|edit this page|click here|see also|main article|jump to|table of contents|cookie policy|privacy policy|terms of use|sign in|log in|create account|powered by|all rights reserved|read more|learn more|skip to content|page semi-protected|this is a good article)\b/i;
+
+  function cleanClaimText(sentence) {
+    let cleaned = sentence;
+    for (const re of BRACKET_NOISE_PATTERNS) cleaned = cleaned.replace(re, ' ');
+    return cleaned.replace(/\s+/g, ' ').trim();
+  }
+
   /**
-   * Placeholder claim extractor — splits into sentences and keeps ones
-   * that look like verifiable statements. Replace with model output.
+   * Placeholder claim extractor — splits into sentences, strips footnote
+   * markers, drops UI/navigation patterns, and keeps sentences that look
+   * like verifiable statements. Replace with model output.
    */
   function extractClaims(text) {
     const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
@@ -277,8 +473,17 @@
    */
   function buildFlatTextIndex() {
     const REJECT_TAGS = new Set([
-      'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT',
-      'SELECT', 'OPTION', 'SVG', 'CANVAS', 'CODE', 'PRE'
+      'SCRIPT',
+      'STYLE',
+      'NOSCRIPT',
+      'TEXTAREA',
+      'INPUT',
+      'SELECT',
+      'OPTION',
+      'SVG',
+      'CANVAS',
+      'CODE',
+      'PRE'
     ]);
 
     const walker = document.createTreeWalker(
@@ -341,7 +546,10 @@
   }
 
   function normalizeClaimText(text) {
-    return text.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    return text
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function createHighlightMark(claim) {
@@ -369,9 +577,8 @@
 
       const nodeLen = node.textContent.length;
       const start = i === startMap.nodeIdx ? startMap.offset : 0;
-      const end = i === endMap.nodeIdx
-        ? Math.min(endMap.offset + 1, nodeLen)
-        : nodeLen;
+      const end =
+        i === endMap.nodeIdx ? Math.min(endMap.offset + 1, nodeLen) : nodeLen;
 
       if (start >= end) continue;
 
@@ -476,8 +683,19 @@
     panel.className = 'foc-panel';
     panel.innerHTML = `
       <header class="foc-header">
-        <h1 class="foc-logo">Fact<span class="foc-accent">Or</span>Cap</h1>
-        <button class="foc-close" aria-label="Close sidebar">&times;</button>
+        <div class="foc-header-top">
+          <h1 class="foc-logo">Fact<span class="foc-accent">Or</span>Cap</h1>
+          <button class="foc-close" aria-label="Close sidebar">&times;</button>
+        </div>
+        <div class="foc-mode-toggle" role="tablist" aria-label="Fact-checking mode">
+          <button class="foc-mode-btn" type="button" role="tab" data-mode="standard">
+            Standard
+          </button>
+          <button class="foc-mode-btn" type="button" role="tab" data-mode="enhanced"
+                  title="Routes claims through your local backend (pgvector + NLI + Wikipedia). Requires the backend running on localhost:8000.">
+            Enhanced<span class="foc-mode-alpha">ALPHA</span>
+          </button>
+        </div>
       </header>
       <div class="foc-body"></div>
     `;
@@ -487,6 +705,12 @@
       closeSidebar();
       removeHighlights();
     });
+
+    shadowRoot.querySelectorAll('.foc-mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setMode(btn.dataset.mode));
+    });
+
+    syncModeToggleUI();
   }
 
   function openSidebar() {
@@ -548,7 +772,9 @@
     const body = getBody();
     const factCount = claims.filter((c) => c.verdict === 'fact').length;
     const capCount = claims.filter((c) => c.verdict === 'cap').length;
-    const unverifiedCount = claims.filter((c) => c.verdict === 'unverified').length;
+    const unverifiedCount = claims.filter(
+      (c) => c.verdict === 'unverified'
+    ).length;
     const checkingCount = claims.filter((c) => c.verdict === 'checking').length;
 
     body.innerHTML = `
@@ -594,21 +820,36 @@
         cap: '&#10007; Cap',
         unverified: '&#63; Unverified'
       };
-      const verdictLabel = verdictLabels[claim.verdict] || verdictLabels.checking;
+      const verdictLabel =
+        verdictLabels[claim.verdict] || verdictLabels.checking;
 
       const ratingHtml = claim.rating
         ? `<span class="foc-rating">Rated: &ldquo;${escapeHtml(claim.rating)}&rdquo;</span>`
         : '';
 
+      const aiBadgeHtml =
+        claim.source === 'ai'
+          ? `<span class="foc-ai-badge" title="Verdict generated by AI, not a published fact-check">AI</span>`
+          : '';
+
+      const enhancedBadgeHtml =
+        claim.source === 'enhanced'
+          ? `<span class="foc-alpha-badge" title="Verdict from the local backend (pgvector + NLI + Wikipedia). ALPHA — accuracy still being tuned.">ALPHA</span>`
+          : '';
+
       const sourceHtml = claim.sourceUrl
         ? `<a class="foc-source-link" href="${escapeHtml(claim.sourceUrl)}" target="_blank" rel="noopener">
             ${claim.publisher ? escapeHtml(claim.publisher) : 'View source'} &#8599;
           </a>`
-        : '';
+        : claim.source === 'ai' && claim.publisher
+          ? `<span class="foc-source-link foc-source-ai">${escapeHtml(claim.publisher)}</span>`
+          : '';
 
       li.innerHTML = `
         <div class="foc-card-top">
           <span class="foc-verdict foc-verdict-${claim.verdict}">${verdictLabel}</span>
+          ${aiBadgeHtml}
+          ${enhancedBadgeHtml}
           ${ratingHtml}
         </div>
         <p class="foc-card-text">${escapeHtml(claim.text)}</p>
@@ -666,11 +907,66 @@
       /* ── Header ── */
       .foc-header {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
+        flex-direction: column;
+        gap: 12px;
         padding: 16px 20px;
         border-bottom: 1px solid #2a2e3b;
         flex-shrink: 0;
+      }
+
+      .foc-header-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      /* ── Mode toggle ── */
+      .foc-mode-toggle {
+        display: flex;
+        background: #0b0d13;
+        border: 1px solid #2a2e3b;
+        border-radius: 8px;
+        padding: 3px;
+        gap: 2px;
+      }
+
+      .foc-mode-btn {
+        flex: 1;
+        background: transparent;
+        border: none;
+        color: #8b8fa3;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 6px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        transition: background 0.15s ease, color 0.15s ease;
+        font-family: inherit;
+      }
+
+      .foc-mode-btn:hover {
+        color: #e4e6ed;
+      }
+
+      .foc-mode-btn-active {
+        background: #2a2e3b;
+        color: #e4e6ed;
+      }
+
+      .foc-mode-alpha {
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.6px;
+        padding: 2px 5px;
+        border-radius: 4px;
+        color: #c4b5fd;
+        background: rgba(124, 106, 239, 0.18);
+        border: 1px solid rgba(124, 106, 239, 0.35);
+        line-height: 1;
       }
 
       .foc-logo {
@@ -913,6 +1209,48 @@
         font-size: 11px;
         color: #8b8fa3;
         font-style: italic;
+      }
+
+      .foc-ai-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.6px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        color: #c4b5fd;
+        background: rgba(124, 106, 239, 0.12);
+        border: 1px solid rgba(124, 106, 239, 0.4);
+        cursor: help;
+      }
+
+      /* Visually parallel to .foc-ai-badge but in a warmer hue so the user
+         can tell at a glance that the verdict came from the local backend. */
+      .foc-alpha-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.6px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        color: #fcd34d;
+        background: rgba(251, 191, 36, 0.12);
+        border: 1px solid rgba(251, 191, 36, 0.45);
+        cursor: help;
+      }
+
+      .foc-source-link.foc-source-ai {
+        color: #8b8fa3;
+        font-style: italic;
+        cursor: default;
+        text-decoration: none;
+      }
+
+      .foc-source-link.foc-source-ai:hover {
+        color: #8b8fa3;
+        text-decoration: none;
       }
 
       .foc-card-text {

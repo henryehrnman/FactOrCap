@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: factorcap-postgres
+    environment:
+      POSTGRES_USER: factorcap
+      POSTGRES_PASSWORD: factorcap
+      POSTGRES_DB: factorcap
+    ports:
+      - "5433:5432"
+    volumes:
+      - factorcap-pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U factorcap -d factorcap"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  factorcap-pgdata:

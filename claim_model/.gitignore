@@ -1,0 +1,5 @@
+# Trained model weights are too large for git and rebuild from scratch via
+# `python claim_model/train_claim_detector.py` (~1-2 min on a fresh checkout).
+# metadata.json is small and worth keeping for verdict-threshold reference.
+artifacts/*.keras
+artifacts/*.h5

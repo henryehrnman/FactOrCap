@@ -5,7 +5,7 @@
   "description": "Official samples for Chrome Extensions and the Chrome Apps platform.",
   "scripts": {
     "prettier": "npx prettier **/*.{md,html,json} -w",
-    "lint": "eslint **/*.js",
+    "lint": "eslint background.js content.js",
     "lint:fix": "npm run lint -- --fix",
     "prepare": "husky install"
   },
