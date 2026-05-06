@@ -438,10 +438,10 @@
   // Sentences that match these patterns are almost always navigation /
   // boilerplate, even though they pass the verb-keyword filter. Each
   // entry has caused at least one bad extraction we've seen in testing.
-  const UI_NOISE_PATTERN =
+  const _UI_NOISE_PATTERN =
     /\b(view source|edit this page|click here|see also|main article|jump to|table of contents|cookie policy|privacy policy|terms of use|sign in|log in|create account|powered by|all rights reserved|read more|learn more|skip to content|page semi-protected|this is a good article)\b/i;
 
-  function cleanClaimText(sentence) {
+  function _cleanClaimText(sentence) {
     let cleaned = sentence;
     for (const re of BRACKET_NOISE_PATTERNS) cleaned = cleaned.replace(re, ' ');
     return cleaned.replace(/\s+/g, ' ').trim();
@@ -759,7 +759,7 @@
     `;
   }
 
-  function renderSidebarError(msg) {
+  function _renderSidebarError(msg) {
     getBody().innerHTML = `
       <div class="foc-state-msg foc-error">
         <p class="foc-empty-icon">&#9888;</p>

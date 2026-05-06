@@ -1,8 +1,8 @@
-// ── API key is loaded from config.js. That file is git-ignored and
-//    is generated either locally (cp config.template.js config.js,
-//    then paste your key) or by the GitHub Actions build, which
-//    substitutes the GOOGLE_FACT_CHECK_API_KEY repository secret
-//    into config.template.js. See README.md for full setup.
+// --- API key is loaded from config.js. That file is git-ignored and
+//     is generated either locally (cp config.template.js config.js,
+//     then paste your key) or by the GitHub Actions build, which
+//     substitutes the GOOGLE_FACT_CHECK_API_KEY repository secret
+//     into config.template.js. See README.md for full setup.
 try {
   importScripts('config.js');
 } catch {
@@ -47,7 +47,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   if (!tab?.id) return;
   try {
     await chrome.tabs.sendMessage(tab.id, { action: 'toggleScan' });
-  } catch (_err) {
+  } catch {
     // No content script on this tab — usually because the page was already
     // open when the extension was loaded/reloaded. Inject it on demand,
     // then resend. chrome:// and other privileged pages will fail here too;
@@ -316,7 +316,7 @@ async function checkOneEnhanced(claimText) {
   let data;
   try {
     data = await res.json();
-  } catch (err) {
+  } catch {
     throw new Error('Enhanced backend returned non-JSON body.');
   }
 
