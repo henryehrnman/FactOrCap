@@ -32,24 +32,57 @@ const FACT_CHECK_BASE =
 const GEMINI_BASE =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-chrome.action.onClicked.addListener((tab) => {
-  if (!tab.id) return;
-  chrome.tabs.sendMessage(tab.id, { action: 'toggleScan' });
+// Local backend that runs the pgvector + NLI + Wikipedia pipeline.
+// Used when the user flips the sidebar toggle to "Enhanced (ALPHA)".
+const ENHANCED_BACKEND_URL = 'http://127.0.0.1:8000/verify';
+
+// Maps the backend's verdict vocabulary onto the extension's.
+const ENHANCED_VERDICT_MAP = {
+  true: 'fact',
+  false: 'cap',
+  unverified: 'unverified'
+};
+
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab?.id) return;
+  try {
+    await chrome.tabs.sendMessage(tab.id, { action: 'toggleScan' });
+  } catch (_err) {
+    // No content script on this tab — usually because the page was already
+    // open when the extension was loaded/reloaded. Inject it on demand,
+    // then resend. chrome:// and other privileged pages will fail here too;
+    // we swallow the secondary error so the service worker stays clean.
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content.js']
+      });
+      await chrome.scripting.insertCSS({
+        target: { tabId: tab.id },
+        files: ['content.css']
+      });
+      await chrome.tabs.sendMessage(tab.id, { action: 'toggleScan' });
+    } catch (injectErr) {
+      console.warn(
+        'FactOrCap: cannot run on this tab (likely a chrome:// or store page).',
+        injectErr?.message || injectErr
+      );
+    }
+  }
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action === 'checkClaims') {
-    checkAllClaims(msg.claims)
-      .then((results) => sendResponse({ results }))
+  if (msg.action === 'checkClaim') {
+    const run =
+      msg.mode === 'enhanced'
+        ? () => checkOneEnhanced(msg.claim)
+        : () => checkSingleClaim(msg.claim);
+    run()
+      .then((result) => sendResponse({ result }))
       .catch((err) => sendResponse({ error: err.message }));
     return true;
   }
 });
-
-async function checkAllClaims(claimTexts) {
-  const results = await Promise.all(claimTexts.map(checkSingleClaim));
-  return results;
-}
 
 async function checkSingleClaim(claimText) {
   const factCheckResult = await checkWithGoogleFactCheck(claimText);
@@ -242,4 +275,137 @@ function unverifiedResult(
     publisher: '',
     source: 'fact-checker'
   };
+}
+
+/**
+ * Enhanced (ALPHA) mode: post one claim to the local backend's /verify
+ * endpoint. Calls are made per-claim (instead of as a batch) so the
+ * sidebar can render each verdict as it arrives — the backend processes
+ * verify_claims sequentially anyway, so wall-clock cost is the same.
+ *
+ * The backend runs pgvector retrieval over the ingested news + fact-
+ * checker corpus, scores candidates with DeBERTa NLI, falls back to
+ * Wikipedia for general factual claims, and combines with a Google Fact
+ * Check Tools call. We map its richer response onto the same
+ * {text, verdict, rating, ...} shape the sidebar already renders.
+ */
+async function checkOneEnhanced(claimText) {
+  let res;
+  try {
+    res = await fetch(ENHANCED_BACKEND_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ claims: [claimText] })
+    });
+  } catch (err) {
+    console.error('FactOrCap: enhanced backend fetch failed', err);
+    throw new Error(
+      'Enhanced backend unreachable at ' +
+        ENHANCED_BACKEND_URL +
+        '. Start it with `uvicorn app.main:app` (from backend/) or switch to Standard mode.'
+    );
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(
+      `Enhanced backend returned ${res.status}. ${body.slice(0, 200) || 'See service logs.'}`
+    );
+  }
+
+  let data;
+  try {
+    data = await res.json();
+  } catch (err) {
+    throw new Error('Enhanced backend returned non-JSON body.');
+  }
+
+  const r = Array.isArray(data?.results) ? data.results[0] : null;
+  if (!r) {
+    return {
+      text: claimText,
+      verdict: 'unverified',
+      rating: '',
+      explanation: 'Enhanced backend returned no result for this claim.',
+      sourceUrl: '',
+      publisher: '',
+      source: 'enhanced'
+    };
+  }
+  return mapEnhancedResult(claimText, r);
+}
+
+function mapEnhancedResult(claimText, result) {
+  const verdict = ENHANCED_VERDICT_MAP[result.verdict] || 'unverified';
+  const topFc = pickTopFactCheck(result.fact_checks);
+  const topEv = pickTopEvidence(result.evidence);
+
+  const sourceUrl = topFc?.review_url || topEv?.url || '';
+  const publisher =
+    topFc?.publisher ||
+    (topEv ? `${topEv.source}${topEv.title ? ` — ${topEv.title}` : ''}` : '');
+
+  const score = typeof result.score === 'number' ? result.score : null;
+  const confidence =
+    typeof result.confidence === 'number' ? result.confidence : null;
+
+  // Prefer a real fact-check label (e.g. "Mostly False"); fall back to a
+  // signed numeric score so the user can still gauge magnitude.
+  const rating =
+    topFc?.rating || (score !== null ? `Score ${formatSigned(score)}` : '');
+
+  const explanationParts = [];
+  if (confidence !== null) {
+    explanationParts.push(`confidence ${(confidence * 100).toFixed(0)}%`);
+  }
+  if (topEv) {
+    const label = topEv.nli_label || 'evidence';
+    const title = topEv.title || topEv.source;
+    explanationParts.push(`top: ${title} (${label})`);
+  } else if (topFc) {
+    explanationParts.push(`via ${topFc.publisher || 'fact-checker'}`);
+  }
+  const explanation =
+    explanationParts.length > 0
+      ? `Local backend · ${explanationParts.join(' · ')}`
+      : 'Verified by the local backend.';
+
+  return {
+    text: claimText,
+    verdict,
+    rating,
+    explanation,
+    sourceUrl,
+    publisher,
+    source: 'enhanced',
+    score,
+    confidence
+  };
+}
+
+function pickTopFactCheck(list) {
+  if (!Array.isArray(list)) return null;
+  // Prefer parseable matches; the backend already filtered by relevance.
+  return list.find((f) => f && f.parseable !== false) || list[0] || null;
+}
+
+function pickTopEvidence(list) {
+  if (!Array.isArray(list) || list.length === 0) return null;
+  let best = null;
+  let bestScore = -Infinity;
+  for (const e of list) {
+    const sim = typeof e.similarity === 'number' ? e.similarity : 0;
+    const nli = typeof e.nli_score === 'number' ? e.nli_score : 0;
+    const ranked = Math.abs(nli) * sim;
+    if (ranked > bestScore) {
+      bestScore = ranked;
+      best = e;
+    }
+  }
+  return best;
+}
+
+function formatSigned(n) {
+  const fixed = n.toFixed(2);
+  return n >= 0 ? `+${fixed}` : fixed;
 }

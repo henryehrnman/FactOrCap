@@ -1,0 +1,103 @@
+# Ingestion sources, tiered by signal quality for the NLI pipeline.
+#
+#   source_class:
+#     factcheck  — dedicated fact-checkers (highest NLI signal)
+#     news       — general news (broad coverage, lower per-claim signal)
+#     reference  — gov/scientific authorities (numbers, health, science)
+#
+#   claimreview: true
+#     Worker parses schema.org/ClaimReview JSON-LD from each entry's URL
+#     instead of running trafilatura over the article body. Falls back to
+#     full-article extraction if no ClaimReview blocks are found on the page.
+#
+# URLs marked TODO/verify are best-guess paths I'd confirm with a curl before
+# trusting them in prod. The well-known ones (BBC, NPR, Snopes, FactCheck.org)
+# I'm confident on.
+
+feeds:
+  # ── Tier 1: dedicated fact-checkers ────────────────────────────────
+  - source: snopes
+    source_class: factcheck
+    claimreview: true
+    url: https://www.snopes.com/feed/
+
+  - source: politifact
+    source_class: factcheck
+    claimreview: true
+    url: https://www.politifact.com/rss/factchecks/
+
+  - source: factcheck_org
+    source_class: factcheck
+    claimreview: true
+    url: https://www.factcheck.org/feed/
+
+  - source: lead_stories
+    source_class: factcheck
+    claimreview: true
+    url: https://leadstories.com/atom.xml
+
+  - source: full_fact
+    source_class: factcheck
+    claimreview: true
+    url: https://fullfact.org/feed/all/
+
+  - source: africa_check
+    source_class: factcheck
+    claimreview: true
+    url: https://africacheck.org/feed
+
+  # sciencefeedback.co was timing out at ingestion time. Re-enable when stable.
+  # - source: science_feedback
+  #   source_class: factcheck
+  #   claimreview: true
+  #   url: https://sciencefeedback.co/feed/
+
+  - source: check_your_fact
+    source_class: factcheck
+    claimreview: true
+    url: https://checkyourfact.com/feed/
+
+  # ── Tier 2: general news (broad current events) ────────────────────
+  - source: bbc_world
+    source_class: news
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+
+  - source: bbc_science
+    source_class: news
+    url: https://feeds.bbci.co.uk/news/science_and_environment/rss.xml
+
+  - source: bbc_health
+    source_class: news
+    url: https://feeds.bbci.co.uk/news/health/rss.xml
+
+  - source: npr_news
+    source_class: news
+    url: https://feeds.npr.org/1001/rss.xml
+
+  - source: guardian_world
+    source_class: news
+    url: https://www.theguardian.com/world/rss
+
+  - source: aljazeera
+    source_class: news
+    url: https://www.aljazeera.com/xml/rss/all.xml
+
+  # ── Tier 3: authoritative reference ────────────────────────────────
+  # Health / science / stats. Lower-frequency but high-trust per item.
+  - source: cdc_newsroom
+    source_class: reference
+    url: https://tools.cdc.gov/podcasts/feed.asp?feedid=183  # TODO/verify
+
+  - source: who_news
+    source_class: reference
+    url: https://www.who.int/rss-feeds/news-english.xml  # TODO/verify
+
+  - source: nasa_news
+    source_class: reference
+    url: https://www.nasa.gov/news-release/feed/
+
+  # NOAA does not publish a unified news RSS at /news/rss.xml (returns 404).
+  # Each NOAA office has its own feed; pick specific ones if you need this.
+  # - source: noaa_news
+  #   source_class: reference
+  #   url: https://www.noaa.gov/news/rss.xml
