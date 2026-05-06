@@ -15,7 +15,8 @@ You'll also need:
 
 - A **Google Fact Check Tools API key** — free.
   Get one at <https://console.cloud.google.com/apis/credentials>; before generating the key, enable the "Fact Check Tools API" in the same project. No billing required.
-- Optional: a **Gemini API key** for the AI fallback — <https://aistudio.google.com/app/apikey>.
+
+The fallback for claims with no published fact-check uses the public Wikipedia REST API — no key, no signup.
 
 ---
 
@@ -30,17 +31,16 @@ cd FactOrCap
 
 ## 2. Run the extension (Standard mode)
 
-This is enough for the published Google Fact Check + Gemini path.
+This is enough for the published Google Fact Check + Wikipedia fallback path.
 
 ```bash
 cp config.template.js config.js
 ```
 
-Open `config.js` and paste your keys in place of the `__…__` placeholders:
+Open `config.js` and paste your key in place of the `__…__` placeholder:
 
 ```js
 self.GOOGLE_FACT_CHECK_API_KEY = 'AIzaSy…your key…';
-self.GEMINI_API_KEY = ''; // leave blank to disable AI fallback
 ```
 
 Load the extension in Chrome:

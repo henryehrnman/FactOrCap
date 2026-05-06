@@ -22,15 +22,13 @@ const HAS_VALID_GOOGLE_KEY =
     'CI_PLACEHOLDER_SET_GOOGLE_FACT_CHECK_API_KEY_SECRET'
   );
 
-const GEMINI_API_KEY = self.GEMINI_API_KEY || '';
-const GEMINI_ENABLED =
-  GEMINI_API_KEY && !GEMINI_API_KEY.startsWith('__GEMINI_API_KEY__');
-
 const FACT_CHECK_BASE =
   'https://factchecktools.googleapis.com/v1alpha1/claims:search';
 
-const GEMINI_BASE =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+// Wikipedia REST endpoints — free, no key, no per-app quota.
+// Used to enrich "unverified" claims with a real source the user can read.
+const WIKI_SEARCH_URL = 'https://en.wikipedia.org/w/rest.php/v1/search/page';
+const WIKI_SUMMARY_URL = 'https://en.wikipedia.org/api/rest_v1/page/summary';
 
 // Local backend that runs the pgvector + NLI + Wikipedia pipeline.
 // Used when the user flips the sidebar toggle to "Enhanced (ALPHA)".
@@ -137,26 +135,41 @@ function runOnce(key, fn) {
 async function checkSingleClaim(claimText) {
   const factCheckResult = await checkWithGoogleFactCheck(claimText);
 
-  // Only fall back to the model when Google's index has no decisive match,
-  // and only if a Gemini key is configured.
-  if (factCheckResult.verdict === 'unverified' && GEMINI_ENABLED) {
-    const aiResult = await checkWithGemini(claimText);
-    if (!aiResult) return factCheckResult;
-    // If Gemini also can't decide, keep the better of the two — preferring
-    // Google's result when it has a real source URL the user can click.
-    if (aiResult.verdict === 'unverified' && factCheckResult.sourceUrl) {
-      return {
-        ...factCheckResult,
-        explanation:
-          factCheckResult.explanation ||
-          aiResult.explanation ||
-          factCheckResult.explanation
-      };
-    }
-    return aiResult;
+  // Decisive Google fact-check wins outright.
+  if (factCheckResult.verdict !== 'unverified') return factCheckResult;
+
+  // Otherwise, look up Wikipedia and attach what we find as context. We
+  // intentionally do NOT promote this to fact/cap on our own — Wikipedia
+  // alone can't decide a verdict — but having a real source the reader
+  // can click on is far more useful than a blank "?".
+  const wiki = await checkWithWikipedia(claimText);
+  if (!wiki) return factCheckResult;
+
+  // If Google had ANY hit (even unverified) that came with a source URL —
+  // e.g. a "mixture" rated fact-check — keep that as primary, and append
+  // Wikipedia context to the explanation. Otherwise Wikipedia is the
+  // primary source.
+  const hasGoogleSource = !!factCheckResult.sourceUrl;
+  const wikiBlurb = `Wikipedia · ${wiki.title}: ${wiki.extract}`;
+
+  if (hasGoogleSource) {
+    return {
+      ...factCheckResult,
+      explanation: factCheckResult.explanation
+        ? `${factCheckResult.explanation} — ${wikiBlurb}`
+        : wikiBlurb
+    };
   }
 
-  return factCheckResult;
+  return {
+    text: claimText,
+    verdict: 'unverified',
+    rating: '',
+    explanation: wikiBlurb,
+    sourceUrl: wiki.url,
+    publisher: 'Wikipedia',
+    source: 'wikipedia'
+  };
 }
 
 /**
@@ -232,85 +245,71 @@ async function checkWithGoogleFactCheck(claimText) {
 }
 
 /**
- * Asks Gemini 2.5 Flash to evaluate the claim and return a structured
- * verdict. Uses Gemini's responseSchema feature so the model is forced
- * to emit valid JSON in the exact shape we expect — no fragile prompt
- * parsing. Returns null on any failure so the caller falls back to the
- * original "unverified" result.
+ * Searches Wikipedia for the most relevant article for a claim and
+ * returns a trimmed page summary with its URL. Free, no key, no quota
+ * specific to this app. Returns null if nothing usable comes back.
  */
-async function checkWithGemini(claimText) {
-  const body = {
-    contents: [
-      {
-        parts: [
-          {
-            text:
-              'You are a careful fact-checker. Evaluate the following ' +
-              'claim using widely available, mainstream knowledge. Use ' +
-              '"fact" if the claim is clearly true or accurate, "cap" ' +
-              'if it is clearly false, misleading, or fabricated, and ' +
-              '"unverified" if you do not have enough reliable ' +
-              'information either way. Keep the explanation to one ' +
-              'short sentence.\n\nClaim: ' +
-              claimText
-          }
-        ]
-      }
-    ],
-    generationConfig: {
-      temperature: 0.1,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: 'object',
-        properties: {
-          verdict: {
-            type: 'string',
-            enum: ['fact', 'cap', 'unverified']
-          },
-          explanation: { type: 'string' }
-        },
-        required: ['verdict', 'explanation']
-      }
-    }
-  };
+async function checkWithWikipedia(claimText) {
+  const query = buildWikiQuery(claimText);
+  if (!query) return null;
 
   try {
-    const res = await fetch(`${GEMINI_BASE}?key=${GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+    const searchUrl = `${WIKI_SEARCH_URL}?q=${encodeURIComponent(query)}&limit=1`;
+    const searchRes = await fetch(searchUrl, {
+      headers: { 'Api-User-Agent': 'FactOrCap/1.0 (chrome-extension)' }
     });
+    if (!searchRes.ok) return null;
+    const searchData = await searchRes.json();
+    const top = searchData?.pages?.[0];
+    if (!top?.key) return null;
 
-    if (!res.ok) {
-      console.warn('FactOrCap: Gemini returned', res.status, await res.text());
-      return null;
-    }
+    const sumUrl = `${WIKI_SUMMARY_URL}/${encodeURIComponent(top.key)}`;
+    const sumRes = await fetch(sumUrl, {
+      headers: { 'Api-User-Agent': 'FactOrCap/1.0 (chrome-extension)' }
+    });
+    if (!sumRes.ok) return null;
+    const summary = await sumRes.json();
 
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return null;
+    if (summary?.type === 'disambiguation') return null;
 
-    const parsed = JSON.parse(text);
-    if (
-      !parsed.verdict ||
-      !['fact', 'cap', 'unverified'].includes(parsed.verdict)
-    ) {
-      return null;
-    }
+    const extract = String(summary.extract || '').trim();
+    if (!extract) return null;
+
+    const trimmed =
+      extract.length > 280 ? `${extract.slice(0, 277).trimEnd()}…` : extract;
+
+    const url =
+      summary.content_urls?.desktop?.page ||
+      `https://en.wikipedia.org/wiki/${encodeURIComponent(top.key)}`;
 
     return {
-      text: claimText,
-      verdict: parsed.verdict,
-      rating: '',
-      explanation: parsed.explanation || '',
-      sourceUrl: '',
-      publisher: 'Gemini 2.5 Flash',
-      source: 'ai'
+      title: summary.title || top.key.replace(/_/g, ' '),
+      url,
+      extract: trimmed
     };
   } catch (err) {
-    console.error('FactOrCap: Gemini fallback failed', err);
+    console.warn('FactOrCap: Wikipedia lookup failed', err);
     return null;
   }
+}
+
+/**
+ * Trims the claim down to a query Wikipedia's search will accept. Strips
+ * obvious framing ("according to…", "studies show that…") and caps to a
+ * length the search endpoint handles well.
+ */
+function buildWikiQuery(claimText) {
+  const t = String(claimText || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(
+      /^(according to|based on|reports?\s+(say|claim|suggest)|studies?\s+(say|show|suggest|find)s?\s+that|it(?:'s| is)\s+(said|claimed|reported)\s+that)\s+/i,
+      ''
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return '';
+  return t.length > 250 ? t.slice(0, 250) : t;
 }
 
 /**

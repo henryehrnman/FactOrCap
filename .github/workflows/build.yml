@@ -41,10 +41,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Inject API keys into config.js
+      - name: Inject API key into config.js
         env:
           FCT_KEY: ${{ secrets.GOOGLE_FACT_CHECK_API_KEY }}
-          GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           # Version tags must ship a real Fact Check API key.
           if [ -z "$FCT_KEY" ] && [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
@@ -57,19 +56,10 @@ jobs:
             echo "::warning::GOOGLE_FACT_CHECK_API_KEY is not set; using a CI placeholder (set the secret for real builds)."
             FCT_KEY="CI_PLACEHOLDER_SET_GOOGLE_FACT_CHECK_API_KEY_SECRET"
           fi
-          # GEMINI_API_KEY is optional: if missing, the AI fallback is
-          # simply disabled in the built extension. Substitute an empty
-          # string in that case so the placeholder doesn't ship.
-          GEMINI_VALUE="${GEMINI_KEY:-}"
-          if [ -z "$GEMINI_VALUE" ]; then
-            echo "::warning::GEMINI_API_KEY secret is not set; AI fallback will be disabled in this build."
-          fi
           # awk treats every character literally, so values with sed
           # special chars (none expected, but be safe) won't break.
-          awk -v fct="$FCT_KEY" -v gem="$GEMINI_VALUE" '
-            { gsub(/__GOOGLE_FACT_CHECK_API_KEY__/, fct);
-              gsub(/__GEMINI_API_KEY__/, gem);
-              print }
+          awk -v fct="$FCT_KEY" '
+            { gsub(/__GOOGLE_FACT_CHECK_API_KEY__/, fct); print }
           ' config.template.js > config.js
           echo "Wrote config.js ($(wc -c < config.js) bytes)"
 
@@ -90,7 +80,7 @@ jobs:
 
       - name: Verify build has no placeholder left behind
         run: |
-          if grep -E "__GOOGLE_FACT_CHECK_API_KEY__|__GEMINI_API_KEY__" "dist/factorcap/config.js"; then
+          if grep -E "__GOOGLE_FACT_CHECK_API_KEY__" "dist/factorcap/config.js"; then
             echo "::error::Placeholder leaked into build output."
             exit 1
           fi
